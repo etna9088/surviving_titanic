@@ -1,0 +1,227 @@
+---
+title: "Assignment 11: Surviving the Titanic"
+author: "Madina Kanafina"
+date: "`r Sys.Date()`"
+documentclass: article
+geometry: margin=1in
+fontsize: 11pt
+output:
+  pdf_document:
+    toc: false
+    df_print: kable
+    fig_caption: false
+    number_sections: false
+    dev: pdf
+    highlight: tango
+  html_document:
+    theme: default
+    self_contained: true
+    toc: false
+    df_print: kable
+    fig_caption: false
+    number_sections: false
+    smart: true
+    dev: svg
+---
+
+```{r setup, include = FALSE}
+# DO NOT ALTER THIS CHUNK
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = TRUE,
+  fig.width = 5,
+  fig.asp = 0.618,
+  out.width = "70%",
+  dpi = 120,
+  fig.align = "center",
+  cache = FALSE
+)
+# Cost function for cross validation
+cost <- function(obs, pred) {
+  outcome <- pred > 0.5
+  return(1 - (sum(obs == outcome) / length(obs)))
+}
+# Load required packages
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(modelr))
+suppressPackageStartupMessages(library(boot))
+```
+
+
+## Exercise 1
+
+```{r}
+train_df <- read_csv(
+  file = "train.csv",
+  col_types = cols(
+    Pclass = col_character(),
+    SibSp = col_character(), 
+    Parch = col_character())
+)
+```
+
+```{r}
+train_df <- train_df %>%
+  mutate(did_survive = as.logical(Survived))
+```
+
+## Exercise 2
+
+```{r}
+train_df %>%
+  pivot_longer(cols = c(Age, Fare), names_to="variable", values_to = "value") %>%
+  ggplot() +
+  geom_histogram(aes(x = value, fill = did_survive), bins = 30, alpha = 0.6) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(
+    title = "Age/Fare by Survival Status",
+    x = "value", 
+    y = "count",
+    fill = "did survive")
+```
+
+i. The distribution of the Age and Fare variables and how does it differ between survivors and non-survivors: For Age histogram there appears to be higher survival rate among young children and people in their 20s and 30s, non-survivors are evenly spread across all ages, while survivors are concentrated in certain age groups. For Fare histogram: survivors tend to have higher fare values on average, with noticeable concentration in the higher fare range, while non-survivors are more at the lower fare values. Both Age and Fare variable could be useful for predicting survival, because passengers in certain age ranges and those who paid higher fares seem to have had better chances of surviving, so including these variables in a predictive model could improve its accuracy. 
+
+## Exercise 3
+
+```{r, fig.width=10, fig.asp=0.6}
+train_df %>%
+  pivot_longer(cols = c(Pclass, Sex, Parch, SibSp), 
+               names_to= "variable", 
+               values_to = "value") %>%
+  ggplot() +
+  geom_bar(aes(x = value, fill = did_survive)) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(
+    title = "Survival by Categorical Variables",
+    x = "Category",
+    y = "Count",
+    fill = "did survive")
+```
+
+i. Relationship between each categorical variable and survival on the Titanic: for Parch (number of parents/children aboard) - passengers with no children or parents on board had a lower survival rate compared to those with 1 or 2 family members, passengers with more family members (more than 2) show very low counts and survival rates. This makes sense because passengers with smaller families tend to stick to each other and access lifeboats, while those without family might have had less priority. 
+
+ii. For Pclass (passenger class): first-class passengers had a much higher survival rate compared to those in second or third class, third-class passengers had the lowest survival rate. This aligns with history: higher-class passengers generally had better access to lifeboats, while third-class passengers and lower had less chance of surviving.
+
+iii. For Sex variable: female passengers had a significantly higher rate than male passengers. This aligns with the "women and children first" evacuation protocol. This variable is one of the strongest indicators of survival, as the difference between male and female survival rates is quite pronounced. 
+
+iv. For SibSp (number of siblings/spouses aboard): passengers with no siblings or spouses had a lower survival rate, passengers with one sibling or spouse had a relatively higher survival rate. Similar to Parch variable, those with family connections might have had a slightly higher chance of survival. 
+
+v. Based on graphs Sex and Pclass are likely the most predictive variables for survival, because they show the most substantial differences in survival rates. 
+
+## Exercise 4
+
+```{r, fig.width=10, fig.asp=0.6}
+train_df %>%
+  ggplot() + 
+  geom_bar(aes(x = Pclass, fill = did_survive)) +
+  facet_wrap(~ Sex) +
+  labs(
+    title = "Passenger Class/Gender Survival",
+    x = "Passenger Class",
+    y = "Count",
+    fill = "Did Survive")
+```
+    
+i. For interaction between Sex and PClass on survival: females had a higher likelihood of survival across all classes, but especially in the first and second class, males, particularly those in lower classes, had much lower survival rates. If there were no interaction, we would expect similar survival-to-non-survival ratios across classes for both males and females. 
+
+## Exercise 5
+
+i.
+```{r}
+train_df %>%
+  summarize(
+    count = n(),
+    missing = sum(is.na(Age)),
+    fraction_missing = sum(is.na(Age)) / n()
+  )
+```
+
+ii. 
+```{r}
+train_imputed <- train_df %>%
+  mutate(
+    age_imputed = if_else(
+      condition = is.na(Age),
+      true = median(Age, na.rm = TRUE),
+      false = Age
+    )
+  )
+```
+
+iii. 
+```{r}
+train_imputed %>%
+  summarize(
+    count = n(),
+    missing = sum(is.na(age_imputed)),
+    fraction_missing = sum(is.na(age_imputed)) / n()
+  )
+```
+## Exercise 6
+
+i. 
+```{r}
+model_1 <- glm(
+  Survived ~ age_imputed,
+  data = train_imputed,
+  family = binomial()
+)
+```
+
+ii.
+```{r}
+model_1_preds <- train_imputed %>%
+  add_predictions(model_1, var = "pred", type = "response") %>%
+  mutate(outcome = if_else(pred > 0.5, 1, 0))
+```
+
+iii.
+```{r}
+model_1_preds %>%
+  mutate(
+    correct = if_else(
+      condition = Survived == outcome,
+      true = 1,
+      false = 0
+    )
+  ) %>%
+  summarize(
+    total_correct = sum(correct),
+    accuracy = mean(correct)
+  )
+```
+iv. With an accuracy of 0.616 (or 61.6%), the model is correctly predicting survival outcomes for around 62% of the passengers. The accuracy is relatively low, and the model uses only age_imputed as a predictor, which is unlikely to be the most powerful feature for predicting survival on Titanic. 
+
+## Exercise 7
+
+```{r}
+logistic_cv1 <- cv.glm(train_imputed, model_1, cost, K=5)
+logistic_cv1$delta
+```
+## Exercise 8
+
+```{r}
+model_2 <- glm(
+  Survived ~ age_imputed + SibSp + Pclass + Sex,
+  data = train_imputed,
+  family = binomial()
+)
+logistic_cv2 <- cv.glm(train_imputed, model_2, cost, K=5)
+logistic_cv2$delta[1]
+```
+```{r}
+model_3 <- glm(
+  Survived ~ age_imputed * Pclass * Sex + SibSp,
+  data = train_imputed,
+  family = binomial()
+)
+logistic_cv3 <- cv.glm(train_imputed, model_3, cost, K=5)
+logistic_cv2$delta[1]
+```
+i. 2nd and 3rd models have the lowest cross-validation error (0.2076) which shows they are the most accurate among the three models. Model_2 is simpler than Model_3 but achieves the same level of predictive accuracy, which might make it more preferable because of its simplicity. 
+
+## Academic Integrity statement
+
+AI tools were not used for this assignment. 
+
